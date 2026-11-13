@@ -1,0 +1,113 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+  
+  code, kbd, samp, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-feature-settings: "tnum" 1;
+  }
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.4);
+}
+
+/* Receipt & Inventory print optimization */
+@media print {
+  @page {
+    margin: 10mm;
+  }
+
+  body {
+    background: white !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .no-print,
+  .no-print * {
+    display: none !important;
+  }
+
+  #printable-receipt,
+  #printable-receipt *,
+  #printable-inventory,
+  #printable-inventory *,
+  #printable-inventory-session,
+  #printable-inventory-session * {
+    visibility: visible;
+  }
+
+  #printable-receipt {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 80mm;
+    margin: 0;
+    padding: 10px;
+    background: white !important;
+    color: black !important;
+  }
+
+  #printable-inventory,
+  #printable-inventory-session {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 16px !important;
+    background: white !important;
+    color: #0f172a !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  #printable-inventory-session * {
+    background-color: transparent !important;
+    color: #0f172a !important;
+    border-color: #cbd5e1 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  #printable-inventory table,
+  #printable-inventory-session table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: auto;
+  }
+
+  #printable-inventory thead,
+  #printable-inventory-session thead {
+    display: table-header-group;
+  }
+
+  #printable-inventory tr,
+  #printable-inventory-session tr {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Silvares Stocks",
+  "description": "SaaS Cloud de gestion de stock, caisse enregistreuse (POS), analytics multi-boutiques, suivi des vendeurs et dépenses.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
