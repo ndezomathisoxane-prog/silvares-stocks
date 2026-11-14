@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { DEFAULT_HOLD_INVOICE_SETTINGS } from '../../data/initialData';
 import {
   Boutique,
   BusinessSector,
   CurrencyCode,
+  HoldInvoiceSettings,
   Organization,
   User,
   UserRole,
@@ -11,6 +13,7 @@ import {
 import {
   Building2,
   Check,
+  Clock,
   Edit2,
   KeyRound,
   Lock,
@@ -234,9 +237,32 @@ export const AdminScreen: React.FC = () => {
   // --- 3. ORGANIZATION CONFIG STATE ---
   const [orgForm, setOrgForm] = useState<Organization>(organization);
 
+  useEffect(() => {
+    setOrgForm(organization);
+  }, [organization]);
+
+  const currentHoldSettings: HoldInvoiceSettings = {
+    ...DEFAULT_HOLD_INVOICE_SETTINGS,
+    ...(orgForm.holdInvoiceSettings || {}),
+  };
+
+  const updateHoldSetting = (patch: Partial<HoldInvoiceSettings>) => {
+    setOrgForm((prev) => ({
+      ...prev,
+      holdInvoiceSettings: {
+        ...DEFAULT_HOLD_INVOICE_SETTINGS,
+        ...(prev.holdInvoiceSettings || {}),
+        ...patch,
+      },
+    }));
+  };
+
   const handleSaveOrganization = (e: React.FormEvent) => {
     e.preventDefault();
-    updateOrganization(orgForm);
+    updateOrganization({
+      ...orgForm,
+      holdInvoiceSettings: currentHoldSettings,
+    });
     showNotice('success', 'Configuration de l’organisation enregistrée.');
   };
 
@@ -928,6 +954,131 @@ export const AdminScreen: React.FC = () => {
                 Autoriser la vente en caisse même lorsque le stock informatique atteint 0
               </span>
             </label>
+          </div>
+
+          {/* Paramétrage : Mise en attente des factures (POS) */}
+          <div className="pt-4 border-t border-slate-800 space-y-4">
+            <div className="flex items-center gap-2">
+              <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+              <div>
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Paramétrage · Mise en attente des factures (POS)
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Définissez les règles d’attente des paniers en caisse : activation, plafond, expiration et réservation du stock.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-950/60 border border-slate-800 rounded-xl p-4">
+              <div className="space-y-3">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    disabled={!canManageOrg}
+                    checked={currentHoldSettings.enabled}
+                    onChange={(e) => updateHoldSetting({ enabled: e.target.checked })}
+                    className="mt-0.5 rounded bg-slate-900 border-slate-700 text-emerald-500"
+                  />
+                  <div>
+                    <div className="text-xs font-semibold text-white">
+                      Activer la mise en attente des factures en caisse
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Permet aux caissiers de mettre un panier de côté et de servir le client suivant.
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    disabled={!canManageOrg || !currentHoldSettings.enabled}
+                    checked={currentHoldSettings.requireReferenceOrCustomer}
+                    onChange={(e) =>
+                      updateHoldSetting({ requireReferenceOrCustomer: e.target.checked })
+                    }
+                    className="mt-0.5 rounded bg-slate-900 border-slate-700 text-emerald-500 disabled:opacity-50"
+                  />
+                  <div>
+                    <div className="text-xs font-semibold text-white">
+                      Exiger un client ou un libellé de référence
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Empêche de mettre en attente un panier anonyme sans note d’identification.
+                    </div>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    disabled={!canManageOrg || !currentHoldSettings.enabled}
+                    checked={currentHoldSettings.reserveStockOnHold}
+                    onChange={(e) =>
+                      updateHoldSetting({ reserveStockOnHold: e.target.checked })
+                    }
+                    className="mt-0.5 rounded bg-slate-900 border-slate-700 text-emerald-500 disabled:opacity-50"
+                  />
+                  <div>
+                    <div className="text-xs font-semibold text-white">
+                      Réserver le stock des articles mis en attente
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Déduit temporairement les quantités en attente du stock disponible en caisse.
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 content-start">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Plafond simultané / boutique
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    disabled={!canManageOrg || !currentHoldSettings.enabled}
+                    value={currentHoldSettings.maxHeldPerBoutique}
+                    onChange={(e) =>
+                      updateHoldSetting({
+                        maxHeldPerBoutique: Math.max(1, Math.min(100, Number(e.target.value) || 1)),
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono tabular-nums text-white disabled:opacity-50"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">
+                    Nombre maximal de factures en attente par point de vente.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Expiration automatique
+                  </label>
+                  <select
+                    disabled={!canManageOrg || !currentHoldSettings.enabled}
+                    value={currentHoldSettings.autoExpireHours}
+                    onChange={(e) =>
+                      updateHoldSetting({ autoExpireHours: Number(e.target.value) })
+                    }
+                    className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-xs font-mono text-white disabled:opacity-50"
+                  >
+                    <option value={0}>Sans expiration</option>
+                    <option value={4}>4 heures</option>
+                    <option value={12}>12 heures</option>
+                    <option value={24}>24 heures (1 jour)</option>
+                    <option value={48}>48 heures (2 jours)</option>
+                    <option value={72}>72 heures (3 jours)</option>
+                  </select>
+                  <span className="text-[10px] text-slate-500 mt-1 block">
+                    Purge automatique après le délai choisi.
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
           {canManageOrg && (

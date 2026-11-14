@@ -6,6 +6,9 @@ import {
   Customer,
   Expense,
   ExpenseStatus,
+  HeldInvoice,
+  HeldInvoiceItem,
+  HoldInvoiceSettings,
   Organization,
   Product,
   PurchaseItem,
@@ -21,6 +24,7 @@ import {
   UserRole,
 } from '../types';
 import {
+  DEFAULT_HOLD_INVOICE_SETTINGS,
   INITIAL_BOUTIQUES,
   INITIAL_CUSTOMERS,
   INITIAL_EXPENSES,
@@ -136,6 +140,20 @@ interface AppContextType {
   customers: Customer[];
   addCustomer: (customer: Omit<Customer, 'id' | 'currentDebt'>) => Customer;
 
+  // Held Invoices (Mise en attente des factures)
+  holdInvoiceSettings: HoldInvoiceSettings;
+  heldInvoices: HeldInvoice[];
+  holdCurrentCart: (payload: {
+    boutiqueId: string;
+    customerId?: string;
+    customerName?: string;
+    referenceNote: string;
+    items: HeldInvoiceItem[];
+    total: number;
+  }) => { ok: boolean; held?: HeldInvoice; error?: string };
+  removeHeldInvoice: (id: string) => void;
+  getReservedStockInBoutique: (productId: string, boutiqueId: string) => number;
+
   // Shifts
   shiftClosures: ShiftClosure[];
   recordShiftClosure: (closure: Omit<ShiftClosure, 'id' | 'date'>) => ShiftClosure;
@@ -202,7 +220,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [organization, setOrganization] = useState<Organization>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY_PREFIX}organization`);
-    return saved ? JSON.parse(saved) : INITIAL_ORGANIZATION;
+    if (saved) {
+      const parsed = JSON.parse(saved) as Organization;
+      return {
+        ...parsed,
+        holdInvoiceSettings: {
+          ...DEFAULT_HOLD_INVOICE_SETTINGS,
+          ...(parsed.holdInvoiceSettings || {}),
+        },
+      };
+    }
+    return INITIAL_ORGANIZATION;
   });
 
   const [currency, setCurrency] = useState<CurrencyCode>(() => {
@@ -307,6 +335,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return saved ? JSON.parse(saved) : INITIAL_PURCHASE_ORDERS;
   });
 
+  const [heldInvoices, setHeldInvoices] = useState<HeldInvoice[]>(() => {
+    const saved = localStorage.getItem(`${STORAGE_KEY_PREFIX}held_invoices`);
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as HeldInvoice[];
+    const now = Date.now();
+    return parsed.filter((h) => !h.expiresAt || new Date(h.expiresAt).getTime() > now);
+  });
+
   // Sync to localStorage
   useEffect(() => {
     localStorage.setItem(`${STORAGE_KEY_PREFIX}organization`, JSON.stringify(organization));
@@ -363,6 +399,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     localStorage.setItem(`${STORAGE_KEY_PREFIX}purchase_orders`, JSON.stringify(purchaseOrders));
   }, [purchaseOrders]);
+
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_KEY_PREFIX}held_invoices`, JSON.stringify(heldInvoices));
+  }, [heldInvoices]);
 
   const currentUser = users.find((u) => u.id === currentUserId) || users[0];
   const currentBoutique = boutiques.find((b) => b.id === selectedBoutiqueId) || null;
@@ -441,6 +481,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         welcomeSubtitle: 'Portail unifié de caisse, gestion des stocks et pilotage multi-boutiques.',
         sessionTimeoutMinutes: 480,
       },
+      holdInvoiceSettings: DEFAULT_HOLD_INVOICE_SETTINGS,
       createdAt: new Date().toISOString(),
     };
 
@@ -492,6 +533,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setShiftClosures([]);
     setTransferNotes([]);
     setPurchaseOrders([]);
+    setHeldInvoices([]);
     setSalesRepGoals([
       {
         sellerId: adminUserId,
@@ -886,6 +928,92 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setSales((prev) => [newSale, ...prev]);
     return newSale;
+  };
+
+  // Held Invoices (Mise en attente des factures)
+  const holdInvoiceSettings: HoldInvoiceSettings = {
+    ...DEFAULT_HOLD_INVOICE_SETTINGS,
+    ...(organization.holdInvoiceSettings || {}),
+  };
+
+  const activeHeldInvoices = heldInvoices.filter(
+    (h) => !h.expiresAt || new Date(h.expiresAt).getTime() > Date.now()
+  );
+
+  const holdCurrentCart: AppContextType['holdCurrentCart'] = (payload) => {
+    if (!holdInvoiceSettings.enabled) {
+      return {
+        ok: false,
+        error: 'La mise en attente des factures est désactivée dans les paramètres de l’organisation.',
+      };
+    }
+
+    if (
+      holdInvoiceSettings.requireReferenceOrCustomer &&
+      !payload.customerId &&
+      !payload.referenceNote.trim()
+    ) {
+      return {
+        ok: false,
+        error: 'Veuillez sélectionner un client ou saisir un libellé/référence avant la mise en attente.',
+      };
+    }
+
+    const currentBoutiqueCount = activeHeldInvoices.filter(
+      (h) => h.boutiqueId === payload.boutiqueId
+    ).length;
+
+    if (currentBoutiqueCount >= holdInvoiceSettings.maxHeldPerBoutique) {
+      return {
+        ok: false,
+        error: `Plafond atteint (${holdInvoiceSettings.maxHeldPerBoutique} factures en attente max pour cette boutique). Reprenez ou supprimez une facture en attente.`,
+      };
+    }
+
+    const now = new Date();
+    const holdSeq = heldInvoices.length + 1;
+    const holdNumber = `ATT-${now.getFullYear()}-${String(holdSeq).padStart(3, '0')}`;
+    const expiresAt =
+      holdInvoiceSettings.autoExpireHours > 0
+        ? new Date(now.getTime() + holdInvoiceSettings.autoExpireHours * 3600 * 1000).toISOString()
+        : undefined;
+
+    const newHeld: HeldInvoice = {
+      id: `hold-${Date.now()}`,
+      holdNumber,
+      boutiqueId: payload.boutiqueId,
+      sellerId: currentUser.id,
+      sellerName: currentUser.name,
+      customerId: payload.customerId,
+      customerName: payload.customerName,
+      referenceNote: payload.referenceNote.trim(),
+      items: payload.items,
+      total: payload.total,
+      createdAt: now.toISOString(),
+      expiresAt,
+    };
+
+    setHeldInvoices((prev) => [
+      newHeld,
+      ...prev.filter((h) => !h.expiresAt || new Date(h.expiresAt).getTime() > Date.now()),
+    ]);
+    return { ok: true, held: newHeld };
+  };
+
+  const removeHeldInvoice = (id: string) => {
+    setHeldInvoices((prev) => prev.filter((h) => h.id !== id));
+  };
+
+  const getReservedStockInBoutique = (productId: string, boutiqueId: string): number => {
+    if (!holdInvoiceSettings.reserveStockOnHold) return 0;
+    return activeHeldInvoices
+      .filter((h) => boutiqueId === 'all' || h.boutiqueId === boutiqueId)
+      .reduce((sum, h) => {
+        const lineQty = h.items
+          .filter((i) => i.productId === productId && i.quantity > 0)
+          .reduce((q, i) => q + i.quantity, 0);
+        return sum + lineQty;
+      }, 0);
   };
 
   // Process Return & Restore Stock (supports full ticket or per-product partial returns)
@@ -1438,6 +1566,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.removeItem(`${STORAGE_KEY_PREFIX}transfer_notes`);
     localStorage.removeItem(`${STORAGE_KEY_PREFIX}suppliers`);
     localStorage.removeItem(`${STORAGE_KEY_PREFIX}purchase_orders`);
+    localStorage.removeItem(`${STORAGE_KEY_PREFIX}held_invoices`);
 
     setOrganization(INITIAL_ORGANIZATION);
     setCurrency(INITIAL_ORGANIZATION.defaultCurrency);
@@ -1453,6 +1582,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSalesRepGoals(INITIAL_SALES_REP_GOALS);
     setSuppliers(INITIAL_SUPPLIERS);
     setPurchaseOrders(INITIAL_PURCHASE_ORDERS);
+    setHeldInvoices([]);
   };
 
   return (
@@ -1502,6 +1632,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         processReturn,
         customers,
         addCustomer,
+        holdInvoiceSettings,
+        heldInvoices: activeHeldInvoices,
+        holdCurrentCart,
+        removeHeldInvoice,
+        getReservedStockInBoutique,
         shiftClosures,
         recordShiftClosure,
         expenses,

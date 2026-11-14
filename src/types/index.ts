@@ -9,6 +9,14 @@ export type BusinessSector =
   | 'Grossiste Multi-sites'
   | 'Électronique & Services';
 
+export interface HoldInvoiceSettings {
+  enabled: boolean;
+  maxHeldPerBoutique: number;
+  requireReferenceOrCustomer: boolean;
+  autoExpireHours: number; // 0 = sans expiration
+  reserveStockOnHold: boolean;
+}
+
 export interface Organization {
   id: string;
   name: string; // Raison sociale (ex: Silvares Distribution SARL)
@@ -34,7 +42,33 @@ export interface Organization {
     welcomeSubtitle: string;
     sessionTimeoutMinutes: number;
   };
+  holdInvoiceSettings?: HoldInvoiceSettings;
   createdAt: string;
+}
+
+export interface HeldInvoiceItem {
+  productId: string;
+  productName: string;
+  sku: string;
+  unitPrice: number;
+  quantity: number;
+  discountPercent: number;
+  total: number;
+}
+
+export interface HeldInvoice {
+  id: string;
+  holdNumber: string;
+  boutiqueId: string;
+  sellerId: string;
+  sellerName: string;
+  customerId?: string;
+  customerName?: string;
+  referenceNote: string;
+  items: HeldInvoiceItem[];
+  total: number;
+  createdAt: string;
+  expiresAt?: string;
 }
 
 export interface User {

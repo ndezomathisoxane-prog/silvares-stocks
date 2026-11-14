@@ -2,6 +2,7 @@ import {
   Boutique,
   Customer,
   Expense,
+  HoldInvoiceSettings,
   Organization,
   Product,
   PurchaseOrder,
@@ -11,6 +12,14 @@ import {
   Supplier,
   User,
 } from '../types';
+
+export const DEFAULT_HOLD_INVOICE_SETTINGS: HoldInvoiceSettings = {
+  enabled: true,
+  maxHeldPerBoutique: 15,
+  requireReferenceOrCustomer: false,
+  autoExpireHours: 24,
+  reserveStockOnHold: false,
+};
 
 export const INITIAL_ORGANIZATION: Organization = {
   id: 'org-silvares-01',
@@ -37,6 +46,7 @@ export const INITIAL_ORGANIZATION: Organization = {
     welcomeSubtitle: 'Connectez-vous à votre point de vente ou console directionnelle.',
     sessionTimeoutMinutes: 480,
   },
+  holdInvoiceSettings: DEFAULT_HOLD_INVOICE_SETTINGS,
   createdAt: '2026-01-15T09:00:00Z',
 };
 

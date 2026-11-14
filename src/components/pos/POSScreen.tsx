@@ -1,13 +1,23 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
-import { CartItem, Customer, ExpenseCategory, PaymentDetail, PaymentMethod, Product, ProductCategory, Sale } from '../../types';
+import {
+  CartItem,
+  Customer,
+  ExpenseCategory,
+  HeldInvoice,
+  HeldInvoiceItem,
+  PaymentDetail,
+  PaymentMethod,
+  Product,
+  ProductCategory,
+  Sale,
+} from '../../types';
 import {
   Search,
   Barcode,
   Plus,
   Minus,
   Trash2,
-  User,
   RotateCcw,
   ShieldCheck,
   Check,
@@ -19,6 +29,11 @@ import {
   Users,
   AlertCircle,
   Receipt,
+  Clock,
+  Pause,
+  Play,
+  Settings,
+  X,
 } from 'lucide-react';
 import { ReceiptModal } from './ReceiptModal';
 import { ShiftClosureModal } from './ShiftClosureModal';
@@ -28,6 +43,7 @@ import { RecentReceiptsPanel } from './RecentReceiptsPanel';
 export const POSScreen: React.FC = () => {
   const {
     products,
+    boutiques,
     selectedBoutiqueId,
     currentUser,
     formatMoney,
@@ -37,6 +53,13 @@ export const POSScreen: React.FC = () => {
     getProductStockInBoutique,
     getCashRegisterSummary,
     addExpense,
+    holdInvoiceSettings,
+    heldInvoices,
+    holdCurrentCart,
+    removeHeldInvoice,
+    getReservedStockInBoutique,
+    openAdminSection,
+    canAccessTab,
   } = useApp();
 
   // Search & Filters
@@ -71,7 +94,18 @@ export const POSScreen: React.FC = () => {
   const [cashExpDesc, setCashExpDesc] = useState('');
   const [cashExpAmount, setCashExpAmount] = useState<number>(2000);
 
+  // Held invoices state
+  const [showHoldModal, setShowHoldModal] = useState(false);
+  const [holdRefNote, setHoldRefNote] = useState('');
+  const [holdError, setHoldError] = useState<string | null>(null);
+  const [showHeldListModal, setShowHeldListModal] = useState(false);
+  const [confirmReplaceHold, setConfirmReplaceHold] = useState<HeldInvoice | null>(null);
+  const [posNotice, setPosNotice] = useState<string | null>(null);
+
   const cashSummary = getCashRegisterSummary(selectedBoutiqueId);
+  const scopedHeldInvoices = heldInvoices.filter(
+    (h) => selectedBoutiqueId === 'all' || h.boutiqueId === selectedBoutiqueId
+  );
 
   // Categories list
   const categories: ProductCategory[] = [
@@ -330,6 +364,96 @@ export const POSScreen: React.FC = () => {
     setCashExpAmount(2000);
   };
 
+  const triggerNotice = (msg: string) => {
+    setPosNotice(msg);
+    setTimeout(() => setPosNotice(null), 4000);
+  };
+
+  const handleOpenHoldModal = () => {
+    if (cart.length === 0) return;
+    setHoldError(null);
+    setHoldRefNote(selectedCustomer ? `Client ${selectedCustomer.name}` : '');
+    setShowHoldModal(true);
+  };
+
+  const handleConfirmHoldInvoice = (e: React.FormEvent) => {
+    e.preventDefault();
+    const heldItems: HeldInvoiceItem[] = cart.map((item) => {
+      const disc = item.discountPercent || 0;
+      const lineTotal = Math.round(item.product.sellingPrice * item.quantity * (1 - disc / 100));
+      return {
+        productId: item.product.id,
+        productName: item.product.name,
+        sku: item.product.sku,
+        unitPrice: item.product.sellingPrice,
+        quantity: item.quantity,
+        discountPercent: disc,
+        total: lineTotal,
+      };
+    });
+
+    const targetBoutiqueId =
+      selectedBoutiqueId === 'all' ? boutiques[0]?.id || 'b1' : selectedBoutiqueId;
+
+    const res = holdCurrentCart({
+      boutiqueId: targetBoutiqueId,
+      customerId: selectedCustomer?.id,
+      customerName: selectedCustomer?.name,
+      referenceNote: holdRefNote,
+      items: heldItems,
+      total,
+    });
+
+    if (!res.ok) {
+      setHoldError(res.error || 'Impossible de mettre la facture en attente.');
+      return;
+    }
+
+    setShowHoldModal(false);
+    setHoldRefNote('');
+    setHoldError(null);
+    clearCart();
+    setIsReturnMode(false);
+    triggerNotice(`Facture ${res.held?.holdNumber || ''} mise en attente.`);
+  };
+
+  const handleResumeHeldInvoice = (held: HeldInvoice) => {
+    if (cart.length > 0 && confirmReplaceHold?.id !== held.id) {
+      setConfirmReplaceHold(held);
+      return;
+    }
+
+    const restoredItems: CartItem[] = [];
+    let missingCount = 0;
+
+    held.items.forEach((item) => {
+      const prod = products.find((p) => p.id === item.productId);
+      if (!prod) {
+        missingCount += 1;
+        return;
+      }
+      restoredItems.push({
+        product: prod,
+        quantity: item.quantity,
+        discountPercent: item.discountPercent || 0,
+      });
+    });
+
+    setCart(restoredItems);
+    const matchedCustomer = held.customerId
+      ? customers.find((c) => c.id === held.customerId) || null
+      : null;
+    setSelectedCustomer(matchedCustomer);
+    removeHeldInvoice(held.id);
+    setConfirmReplaceHold(null);
+    setShowHeldListModal(false);
+    triggerNotice(
+      missingCount > 0
+        ? `Facture ${held.holdNumber} reprise (${missingCount} article(s) retiré(s) du catalogue).`
+        : `Facture ${held.holdNumber} reprise en caisse.`
+    );
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
       
@@ -345,6 +469,17 @@ export const POSScreen: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => {
+              setConfirmReplaceHold(null);
+              setShowHeldListModal(true);
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700/80 border border-slate-700 rounded-lg text-xs font-medium text-amber-300 hover:text-amber-200 transition-colors whitespace-nowrap"
+          >
+            <Clock className="w-3.5 h-3.5 text-amber-400" />
+            <span>Factures en attente ({scopedHeldInvoices.length})</span>
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -379,6 +514,22 @@ export const POSScreen: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {posNotice && (
+        <div className="mb-4 px-4 py-2.5 bg-emerald-950/40 border border-emerald-500/40 rounded-xl text-xs text-emerald-300 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{posNotice}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPosNotice(null)}
+            className="text-emerald-400 hover:text-white p-0.5"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Live Cash Register Balance Strip (Sales - Cash Expenses) */}
       <div className="mb-4 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
@@ -507,7 +658,11 @@ export const POSScreen: React.FC = () => {
           {/* Products Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
             {filteredProducts.map((product) => {
-              const currentStock = getProductStockInBoutique(product.id, selectedBoutiqueId);
+              const physicalStock = getProductStockInBoutique(product.id, selectedBoutiqueId);
+              const reservedStock = holdInvoiceSettings.reserveStockOnHold
+                ? getReservedStockInBoutique(product.id, selectedBoutiqueId)
+                : 0;
+              const currentStock = Math.max(0, physicalStock - reservedStock);
               const isLowStock = currentStock <= product.minThreshold && currentStock > 0;
               const isOutOfStock = currentStock <= 0;
               const isButtonDisabled = isOutOfStock && !isReturnMode;
@@ -541,7 +696,7 @@ export const POSScreen: React.FC = () => {
                   </div>
 
                   {/* Price & Stock info */}
-                  <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-end justify-between">
+                  <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-end justify-between gap-1">
                     <div>
                       <div className="text-[10px] font-mono text-slate-400">
                         {product.sku}
@@ -563,6 +718,11 @@ export const POSScreen: React.FC = () => {
                       >
                         {isOutOfStock ? '0 en stock' : `${currentStock} ${product.unit}`}
                       </span>
+                      {reservedStock > 0 && (
+                        <div className="text-[9px] font-mono text-amber-400 mt-0.5 tabular-nums">
+                          {reservedStock} en attente
+                        </div>
+                      )}
                     </div>
                   </div>
                 </button>
@@ -810,27 +970,48 @@ export const POSScreen: React.FC = () => {
               </span>
             </div>
 
-            <button
-              type="button"
-              onClick={handleOpenCheckout}
-              disabled={cart.length === 0}
-              className={`w-full py-3 rounded-lg font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all ${
-                cart.length === 0
-                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                  : total < 0
-                  ? 'bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold cursor-pointer'
-                  : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold cursor-pointer'
-              }`}
-            >
-              <Banknote className="w-4 h-4" />
-              <span>
-                {total < 0
-                  ? `Rembourser ${formatMoney(Math.abs(total))}`
-                  : total === 0 && cart.length > 0
-                  ? 'Valider l’échange (0 FCFA)'
-                  : `Encaisser ${formatMoney(total)}`}
-              </span>
-            </button>
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleOpenHoldModal}
+                disabled={cart.length === 0 || !holdInvoiceSettings.enabled}
+                title={
+                  !holdInvoiceSettings.enabled
+                    ? 'La mise en attente est désactivée dans les paramètres'
+                    : 'Mettre la facture en attente'
+                }
+                className={`sm:col-span-5 py-3 px-2.5 rounded-lg font-semibold text-xs flex items-center justify-center gap-1.5 border transition-all whitespace-nowrap ${
+                  cart.length === 0 || !holdInvoiceSettings.enabled
+                    ? 'bg-slate-900 border-slate-800 text-slate-600 cursor-not-allowed'
+                    : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-amber-300 cursor-pointer'
+                }`}
+              >
+                <Pause className="w-3.5 h-3.5" />
+                <span>Mettre en attente</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleOpenCheckout}
+                disabled={cart.length === 0}
+                className={`sm:col-span-7 py-3 rounded-lg font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all whitespace-nowrap ${
+                  cart.length === 0
+                    ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                    : total < 0
+                    ? 'bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold cursor-pointer'
+                    : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold cursor-pointer'
+                }`}
+              >
+                <Banknote className="w-4 h-4" />
+                <span>
+                  {total < 0
+                    ? `Rembourser ${formatMoney(Math.abs(total))}`
+                    : total === 0 && cart.length > 0
+                    ? 'Valider l’échange (0 FCFA)'
+                    : `Encaisser ${formatMoney(total)}`}
+                </span>
+              </button>
+            </div>
           </div>
 
         </div>
@@ -1327,6 +1508,277 @@ export const POSScreen: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Hold Current Cart Modal */}
+      {showHoldModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 max-w-md w-full shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Pause className="w-4 h-4 text-amber-400" />
+                  <span>Mettre la facture en attente</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {cart.length} ligne(s) · Total :{' '}
+                  <span className="font-mono font-bold text-emerald-400">{formatMoney(total)}</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHoldModal(false)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmHoldInvoice} className="space-y-3.5">
+              <div className="p-3 bg-slate-950/60 border border-slate-800 rounded-lg text-[11px] text-slate-300 space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Client :</span>
+                  <span className="font-semibold text-white">
+                    {selectedCustomer ? selectedCustomer.name : 'Client Comptoir (Anonyme)'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Expiration configurée :</span>
+                  <span className="font-mono text-slate-200">
+                    {holdInvoiceSettings.autoExpireHours > 0
+                      ? `${holdInvoiceSettings.autoExpireHours} heures`
+                      : 'Sans expiration'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Réservation de stock :</span>
+                  <span className="font-semibold text-slate-200">
+                    {holdInvoiceSettings.reserveStockOnHold ? 'Activée' : 'Désactivée'}
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Libellé / Référence d&apos;identification
+                  {holdInvoiceSettings.requireReferenceOrCustomer && !selectedCustomer ? ' *' : ''} :
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={holdRefNote}
+                  onChange={(e) => {
+                    setHoldRefNote(e.target.value);
+                    if (holdError) setHoldError(null);
+                  }}
+                  placeholder="Ex: Table 3, Client parti retirer du cash..."
+                  className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
+                />
+              </div>
+
+              {holdError && (
+                <div className="p-2.5 bg-rose-950/40 border border-rose-500/40 rounded-lg text-xs text-rose-300 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <span>{holdError}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowHoldModal(false)}
+                  className="px-3.5 py-1.5 text-xs text-slate-300 hover:text-white bg-slate-800 rounded-lg"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors whitespace-nowrap"
+                >
+                  Confirmer la mise en attente
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Held Invoices List Modal */}
+      {showHeldListModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-2xl w-full shadow-2xl overflow-hidden my-6">
+            <div className="p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-400" />
+                  <span>Factures en attente ({scopedHeldInvoices.length})</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {holdInvoiceSettings.enabled ? 'Activée' : 'Désactivée'} · Plafond :{' '}
+                  {holdInvoiceSettings.maxHeldPerBoutique} / boutique ·{' '}
+                  {holdInvoiceSettings.autoExpireHours > 0
+                    ? `Expiration ${holdInvoiceSettings.autoExpireHours}h`
+                    : 'Sans expiration'}{' '}
+                  · {holdInvoiceSettings.reserveStockOnHold ? 'Stock réservé' : 'Stock non réservé'}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {canAccessTab('admin') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowHeldListModal(false);
+                      openAdminSection('organization');
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-medium text-slate-200 transition-colors whitespace-nowrap"
+                  >
+                    <Settings className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Paramétrer</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmReplaceHold(null);
+                    setShowHeldListModal(false);
+                  }}
+                  className="text-slate-400 hover:text-white p-1"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 max-h-[70vh] overflow-y-auto space-y-3">
+              {scopedHeldInvoices.length === 0 ? (
+                <div className="py-12 text-center space-y-2">
+                  <Clock className="w-8 h-8 text-slate-600 mx-auto" />
+                  <div className="text-xs font-semibold text-slate-300">
+                    Aucune facture en attente pour cette boutique.
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Ajoutez des articles au panier puis cliquez sur « Mettre en attente ».
+                  </div>
+                </div>
+              ) : (
+                scopedHeldInvoices.map((held) => {
+                  const boutiqueName =
+                    boutiques.find((b) => b.id === held.boutiqueId)?.name || held.boutiqueId;
+                  const isConfirmingReplace = confirmReplaceHold?.id === held.id;
+                  return (
+                    <div
+                      key={held.id}
+                      className="p-4 bg-slate-950/60 border border-slate-800 rounded-xl space-y-3"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="font-mono font-bold text-amber-400">
+                              {held.holdNumber}
+                            </span>
+                            <span className="text-slate-600">·</span>
+                            <span className="font-semibold text-white">
+                              {held.referenceNote || held.customerName || 'Client Comptoir'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 mt-0.5">
+                            {boutiqueName} · Par {held.sellerName} ·{' '}
+                            {new Date(held.createdAt).toLocaleString('fr-FR')}
+                            {held.expiresAt && (
+                              <>
+                                {' '}
+                                · Expire :{' '}
+                                <span className="font-mono text-slate-300">
+                                  {new Date(held.expiresAt).toLocaleString('fr-FR')}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <div className="text-sm font-extrabold font-mono text-emerald-400 tabular-nums">
+                            {formatMoney(held.total)}
+                          </div>
+                          <div className="text-[10px] text-slate-400">
+                            {held.items.reduce((s, i) => s + i.quantity, 0)} article(s)
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-800/80 pt-2 space-y-1 text-[11px]">
+                        {held.items.map((item, idx) => (
+                          <div
+                            key={`${held.id}-${item.productId}-${idx}`}
+                            className="flex justify-between text-slate-300"
+                          >
+                            <span className="truncate pr-3">
+                              <span className="font-mono text-slate-400">{item.quantity} ×</span>{' '}
+                              {item.productName}
+                              {item.discountPercent > 0 && (
+                                <span className="text-rose-400 ml-1">(-{item.discountPercent}%)</span>
+                              )}
+                            </span>
+                            <span className="font-mono tabular-nums text-slate-200 shrink-0">
+                              {formatMoney(item.total)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {isConfirmingReplace && (
+                        <div className="p-2.5 bg-amber-950/30 border border-amber-500/40 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs">
+                          <span className="text-amber-200">
+                            Le panier actuel n&apos;est pas vide. Le remplacer par {held.holdNumber} ?
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setConfirmReplaceHold(null)}
+                              className="px-2.5 py-1 bg-slate-800 text-slate-300 hover:text-white rounded text-[11px]"
+                            >
+                              Annuler
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleResumeHeldInvoice(held)}
+                              className="px-2.5 py-1 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded text-[11px]"
+                            >
+                              Confirmer le remplacement
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-800/80">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirmReplaceHold?.id === held.id) setConfirmReplaceHold(null);
+                            removeHeldInvoice(held.id);
+                          }}
+                          className="flex items-center gap-1 px-3 py-1.5 bg-slate-900 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-500/40 text-slate-400 hover:text-rose-300 rounded-lg text-xs transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Supprimer</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleResumeHeldInvoice(held)}
+                          className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-lg text-xs transition-colors whitespace-nowrap"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          <span>Reprendre en caisse</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
       )}
